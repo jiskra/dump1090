@@ -109,6 +109,7 @@ struct aircraft {
     char flight[9];     /* Flight number */
     int altitude;       /* Altitude */
     int speed;          /* Velocity computed from EW and NS components. */
+    float rssi;           /* The Received Signal Strength Indication.*/
     int track;          /* Angle of flight. */
     time_t seen;        /* Time at which the last packet was received. */
     long messages;      /* Number of Mode S messages received. */
@@ -242,6 +243,7 @@ struct modesMessage {
 
     /* Fields used by multiple message types. */
     int altitude, unit;
+    float rssi;                   /*Received Signal Strength Indication.*/
 };
 
 void interactiveShowData(void);
@@ -357,6 +359,8 @@ int modesinitUHD(){
     double clock_bk = 16e6;
     char* device_args = "";
     size_t signal_channel = 0;
+
+    if (Modes.gain>760) Modes.gain=760;
 
     if(uhd_set_thread_priority(uhd_default_thread_priority, true)){
             fprintf(stderr, "Unable to set thread priority. Continuing anyway.\n");
@@ -1297,7 +1301,8 @@ void displayModesMessage(struct modesMessage *mm) {
     /* Show the raw message. */
     printf("*");
     for (j = 0; j < mm->msgbits/8; j++) printf("%02x", mm->msg[j]);
-    printf(";\n");
+    	printf(";\n");
+    	printf("  RSSI(dBm):     %04f\n",mm->rssi);
 
     if (Modes.raw) {
         fflush(stdout); /* Provide data to the reader ASAP. */
@@ -1314,6 +1319,7 @@ void displayModesMessage(struct modesMessage *mm) {
         printf("  Altitude       : %d %s\n", mm->altitude,
             (mm->unit == MODES_UNIT_METERS) ? "meters" : "feet");
         printf("  ICAO Address   : %02x%02x%02x\n", mm->aa1, mm->aa2, mm->aa3);
+        printf("  RSSI (dBm)     : %04f\n",mm->rssi);
     } else if (mm->msgtype == 4 || mm->msgtype == 20) {
         printf("DF %d: %s, Altitude Reply.\n", mm->msgtype,
             (mm->msgtype == 4) ? "Surveillance" : "Comm-B");
@@ -1323,7 +1329,7 @@ void displayModesMessage(struct modesMessage *mm) {
         printf("  Altitude       : %d %s\n", mm->altitude,
             (mm->unit == MODES_UNIT_METERS) ? "meters" : "feet");
         printf("  ICAO Address   : %02x%02x%02x\n", mm->aa1, mm->aa2, mm->aa3);
-
+        printf("  RSSI (dBm)     : %04f\n",mm->rssi);
         if (mm->msgtype == 20) {
             /* TODO: 56 bits DF20 MB additional field. */
         }
@@ -1335,7 +1341,7 @@ void displayModesMessage(struct modesMessage *mm) {
         printf("  UM             : %d\n", mm->um);
         printf("  Squawk         : %d\n", mm->identity);
         printf("  ICAO Address   : %02x%02x%02x\n", mm->aa1, mm->aa2, mm->aa3);
-
+        printf("  RSSI (dBm)     : %04f\n",mm->rssi);
         if (mm->msgtype == 21) {
             /* TODO: 56 bits DF21 MB additional field. */
         }
@@ -1344,11 +1350,13 @@ void displayModesMessage(struct modesMessage *mm) {
         printf("DF 11: All Call Reply.\n");
         printf("  Capability  : %s\n", ca_str[mm->ca]);
         printf("  ICAO Address: %02x%02x%02x\n", mm->aa1, mm->aa2, mm->aa3);
+        printf("  RSSI (dBm)     : %04f\n",mm->rssi);
     } else if (mm->msgtype == 17) {
         /* DF 17 */
         printf("DF 17: ADS-B message.\n");
         printf("  Capability     : %d (%s)\n", mm->ca, ca_str[mm->ca]);
         printf("  ICAO Address   : %02x%02x%02x\n", mm->aa1, mm->aa2, mm->aa3);
+        printf("  RSSI (dBm)     : %04f\n",mm->rssi);
         printf("  Extended Squitter  Type: %d\n", mm->metype);
         printf("  Extended Squitter  Sub : %d\n", mm->mesub);
         printf("  Extended Squitter  Name: %s\n",
@@ -1659,7 +1667,8 @@ good_preamble:
 
             /* Decode the received message and update statistics */
             decodeModesMessage(&mm,msg);
-
+            /*Calculate the RSSI of the pulse.*/
+            mm.rssi=20*log10f(high)-Modes.gain/10-72;
             /* Update statistics. */
             if (mm.crcok || use_correction) {
                 if (errors == 0) Modes.stat_demodulated++;
@@ -2751,7 +2760,6 @@ int main(int argc, char **argv) {
             exit(1);
         }
     }
-
     /* Setup for SIGWINCH for handling lines */
     if (Modes.interactive == 1) signal(SIGWINCH, sigWinchCallback);
 
