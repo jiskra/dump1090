@@ -406,7 +406,7 @@ int modesinitUHD(){
 
         // Set gain
         fprintf(stderr, "Setting RX Gain: %f dB...\n", (double)Modes.gain);
-        if (uhd_usrp_set_rx_gain(Modes.usrp, (double)Modes.gain, signal_channel, "")) return 1;
+        if (uhd_usrp_set_rx_gain(Modes.usrp, (double)Modes.gain/10, signal_channel, "")) return 1;
 
         // See what gain actually is
         if (uhd_usrp_get_rx_gain(Modes.usrp, signal_channel, "", &gain_bk)) return 1;
@@ -1422,7 +1422,7 @@ void computeMagnitudeVector(void) {
      for (j=0;j<Modes.data_len;j+=2){
     	 float i = p_f[j];
     	 float q = p_f[j+1];
-    	 m[j/2] = round(sqrt(i*i+q*q)*0.707*65535);
+    	 m[j/2] = round(sqrtf(i*i+q*q)*46340);
     }
     }
 }
@@ -2605,6 +2605,8 @@ int getTermRows() {
 void showHelp(void) {
     printf(
 "--device-index <index>   Select RTL device (default: 0).\n"
+"--rtl                    Select RTL SDR as the RF Source.\n"
+"--UHD/--uhd              Select UHD Device as the RF Source.\n"
 "--gain <db>              Set gain (default: max gain. Use -100 for auto-gain).\n"
 "--enable-agc             Enable the Automatic Gain Control (default: off).\n"
 "--freq <hz>              Set frequency (default: 1090 Mhz).\n"
