@@ -151,11 +151,11 @@ struct {
     uhd_rx_streamer_handle rx_streamer;
     uhd_rx_metadata_handle md;
     char uhd_error_string[512];
-    float *buff = NULL;
-    float *buff_start = NULL;
-    void **buffs_ptr = NULL;
+    float *buff;
+    float *buff_start;
+    void **buffs_ptr;
     size_t samps_per_buff;
-    int return_code = EXIT_SUCCESS;
+    int return_code;
 
     /* Networking */
     char aneterr[ANET_ERR_LEN];
@@ -315,12 +315,12 @@ void modesInit(void) {
     }
     memset(Modes.data,127,Modes.data_len);
 
-    if ((Modes.data_f= malloc(Modes.data_len)) == NULL){ //malloc buff for UHD SDR
+    if ((Modes.data_f= malloc(sizeof(float)*Modes.data_len)) == NULL){ //malloc buff for UHD SDR
 
            fprintf(stderr, "Out of memory allocating UHD data buffer.\n");
            exit(1);
        }
-       memset(Modes.data_f,0,Modes.data_len);
+       memset(Modes.data_f,0,sizeof(float)*Modes.data_len);
 
     /* Populate the I/Q -> Magnitude lookup table. It is used because
      * sqrt or round may be expensive and may vary a lot depending on
@@ -351,14 +351,12 @@ void modesInit(void) {
 }
 /*==================================UHD handling==============================*/
 int modesinitUHD(){
-	int r, n;
     double freq_bk = 500e6;
     double rate_bk = 1e6;
     double gain_bk = 5.0;
     double clock_bk = 16e6;
     char* device_args = "";
     size_t signal_channel = 0;
-    char *argF;
 
     if(uhd_set_thread_priority(uhd_default_thread_priority, true)){
             fprintf(stderr, "Unable to set thread priority. Continuing anyway.\n");
@@ -367,7 +365,7 @@ int modesinitUHD(){
 
     if (uhd_usrp_make(&Modes.usrp, device_args)) return 1;
         // Create RX streamer
-    if (uhd_usrp_set_master_clock_rate(Modes.usrp,50e6,0)) return 1;
+    if (uhd_usrp_set_master_clock_rate(Modes.usrp,40e6,0)) return 1;
 
     if (uhd_usrp_get_master_clock_rate(Modes.usrp,0,&clock_bk)) return 1;
     fprintf(stderr,"Master clock rate is %f.\n",clock_bk);
@@ -440,7 +438,16 @@ int modesinitUHD(){
         return 0;
 
 }
-
+int FreeUHD(void){
+        uhd_rx_streamer_free(&Modes.rx_streamer);
+        uhd_rx_metadata_free(&Modes.md);
+        if(Modes.return_code != EXIT_SUCCESS && Modes.usrp != NULL){
+            uhd_usrp_last_error(Modes.usrp, Modes.uhd_error_string, 512);
+            fprintf(stderr, "USRP reported the following error: %s\n", Modes.uhd_error_string);
+        }
+        uhd_usrp_free(&Modes.usrp);
+    return 0;
+}
 /* =============================== RTLSDR handling ========================== */
 
 void modesInitRTLSDR(void) {
@@ -578,22 +585,28 @@ void *readerThreadEntryPoint(void *arg) {
     return NULL;
 }
 
-int runUHDSample(void){
+void *readThreadUHDSample(void *arg){
+	MODES_NOTUSED(arg);
 	size_t num_acc_samps = 0;
 	size_t num_rx_samps = 0;
 	float *buff_start;
 	float *buff;
 	void **buffs_ptr;
+	if ((Modes.filename != NULL))
+		readDataFromFile();
+	else{
 	 buff_start = buff=malloc((MODES_DATA_LEN+5*2*Modes.samps_per_buff)* sizeof(float));
 	 buffs_ptr = (void**)&buff;
 	while(1){
 	buff=(void*)buff_start+2*sizeof(float)*num_acc_samps;
-	if (uhd_rx_streamer_recv(Modes.rx_streamer, Modes.buffs_ptr, Modes.samps_per_buff, &Modes.md, 3.0, false, &num_rx_samps)) return 1;
+	if (uhd_rx_streamer_recv(Modes.rx_streamer, buffs_ptr, Modes.samps_per_buff, &Modes.md, 3.0, false, &num_rx_samps))
+		pthread_exit(0);
 	uhd_rx_metadata_error_code_t error_code;
-	if (uhd_rx_metadata_error_code(Modes.md, &error_code)) return 1;
+	if (uhd_rx_metadata_error_code(Modes.md, &error_code))
+		pthread_exit(0);
 	if(error_code != UHD_RX_METADATA_ERROR_CODE_NONE){
 	   fprintf(stderr, "Error code 0x%x was returned during streaming. Aborting.\n", error_code);
-	   return 1;
+	   pthread_exit(0);
 	 }
 
 	        // Handle data
@@ -613,19 +626,20 @@ int runUHDSample(void){
 		  pthread_mutex_lock(&Modes.data_mutex);
 		      /* Move the last part of the previous buffer, that was not processed,
 		       * on the start of the new buffer. */
-		      memcpy(Modes.data_f, Modes.data_f+MODES_DATA_LEN, (MODES_FULL_LEN-1)*4);
+		      memcpy((void*)Modes.data_f, (void*)Modes.data_f+MODES_DATA_LEN*sizeof(float), (MODES_FULL_LEN-1)*4*sizeof(float));
 		      /* Read the new data. */
-		      memcpy(Modes.data_f+(MODES_FULL_LEN-1)*4, buff_start, MODES_DATA_LEN);
+		      memcpy((void*)Modes.data_f+(MODES_FULL_LEN-1)*4*sizeof(float), (void*)buff_start, MODES_DATA_LEN*sizeof(float));
 		      Modes.data_ready = 1;
 		      /* Signal to the other thread that new data is ready */
 		      pthread_cond_signal(&Modes.data_cond);
 		      pthread_mutex_unlock(&Modes.data_mutex);
 
 	  		num_acc_samps=num_acc_samps-MODES_DATA_LEN/2;
-	  		memcpy((void*)buff_start, (void*)(buff_start+MODES_DATA_LEN*sizeof(float)), num_acc_samps*sizeof(float)*2);
-	  }//*/
-
+	  		memcpy((void*)buff_start, (void*)buff_start+MODES_DATA_LEN*sizeof(float), num_acc_samps*sizeof(float)*2);
+	  }
    }
+ }
+	return NULL;
 }
 
 /* ============================== Debugging ================================= */
@@ -1389,17 +1403,27 @@ void displayModesMessage(struct modesMessage *mm) {
 void computeMagnitudeVector(void) {
     uint16_t *m = Modes.magnitude;
     unsigned char *p = Modes.data;
+    float *p_f=Modes.data_f;
     uint32_t j;
 
     /* Compute the magnitudo vector. It's just SQRT(I^2 + Q^2), but
      * we rescale to the 0-255 range to exploit the full resolution. */
-    for (j = 0; j < Modes.data_len; j += 2) {
-        int i = p[j]-127;
-        int q = p[j+1]-127;
+    if (Modes.DevID==0){
+     for (j = 0; j < Modes.data_len; j += 2) {
+         int i = p[j]-127;
+         int q = p[j+1]-127;
 
-        if (i < 0) i = -i;
-        if (q < 0) q = -q;
-        m[j/2] = Modes.maglut[i*129+q];
+         if (i < 0) i = -i;
+         if (q < 0) q = -q;
+         m[j/2] = Modes.maglut[i*129+q];
+     }
+    }
+    else if (Modes.DevID==1){
+     for (j=0;j<Modes.data_len;j+=2){
+    	 float i = p_f[j];
+    	 float q = p_f[j+1];
+    	 m[j/2] = round(sqrt(i*i+q*q)*0.707*65535);
+    }
     }
 }
 
@@ -2737,7 +2761,11 @@ int main(int argc, char **argv) {
     	if (Modes.DevID==0)
         modesInitRTLSDR();
     	else if (Modes.DevID==1)
-    	modesinitUHD();
+
+    	if (modesinitUHD()>0){
+    	perror("UHD init error,exit Program.\n");
+    	exit(1);
+    	}
 
     } else {
         if (Modes.filename[0] == '-' && Modes.filename[1] == '\0') {
@@ -2757,8 +2785,10 @@ int main(int argc, char **argv) {
     }
 
     /* Create the thread that will read the data from the device. */
+    if (Modes.DevID==0)
     pthread_create(&Modes.reader_thread, NULL, readerThreadEntryPoint, NULL);
-
+    else
+    pthread_create(&Modes.reader_thread,NULL,readThreadUHDSample,NULL);
     pthread_mutex_lock(&Modes.data_mutex);
     while(1) {
         if (!Modes.data_ready) {
@@ -2802,7 +2832,7 @@ int main(int argc, char **argv) {
     if (Modes.DevID==0)
     	rtlsdr_close(Modes.dev);
     else if (Modes.DevID==1)
-
+    	FreeUHD();
     return 0;
 }
 
