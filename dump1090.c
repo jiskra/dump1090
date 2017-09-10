@@ -409,7 +409,7 @@ int modesinitUHD(){
         fprintf(stderr, "Actual RX Rate: %f...\n", rate_bk);
 
         // Set gain
-        fprintf(stderr, "Setting RX Gain: %f dB...\n", (double)Modes.gain);
+        fprintf(stderr, "Setting RX Gain: %f dB...\n", (double)Modes.gain/10);
         if (uhd_usrp_set_rx_gain(Modes.usrp, (double)Modes.gain/10, signal_channel, "")) return 1;
 
         // See what gain actually is
@@ -1302,9 +1302,9 @@ void displayModesMessage(struct modesMessage *mm) {
     printf("*");
     for (j = 0; j < mm->msgbits/8; j++) printf("%02x", mm->msg[j]);
     	printf(";\n");
-    	printf("  RSSI(dBm):     %04f\n",mm->rssi);
 
     if (Modes.raw) {
+    	printf("  RSSI (dBm)     : %04f\n",mm->rssi);
         fflush(stdout); /* Provide data to the reader ASAP. */
         return; /* Enough for --raw mode */
     }
@@ -1527,6 +1527,7 @@ void detectModeS(uint16_t *m, uint32_t mlen) {
      */
     for (j = 0; j < mlen - MODES_FULL_LEN*2; j++) {
         int low, high, delta, i, errors;
+        int amp;
         int good_message = 0;
 
         if (use_correction) goto good_preamble; /* We already checked it. */
@@ -1557,6 +1558,7 @@ void detectModeS(uint16_t *m, uint32_t mlen) {
          * the high levels as signals can be out of phase so part of the
          * energy can be in the near samples. */
         high = (m[j]+m[j+2]+m[j+7]+m[j+9])/6;
+        amp = high+(m[j+1]+m[j+8])/6;
         if (m[j+4] >= high ||
             m[j+5] >= high)
         {
@@ -1668,7 +1670,7 @@ good_preamble:
             /* Decode the received message and update statistics */
             decodeModesMessage(&mm,msg);
             /*Calculate the RSSI of the pulse.*/
-            mm.rssi=20*log10f(high)-Modes.gain/10-72;
+            mm.rssi=20*log10f(amp)-Modes.gain/10-72;
             /* Update statistics. */
             if (mm.crcok || use_correction) {
                 if (errors == 0) Modes.stat_demodulated++;
@@ -1957,7 +1959,7 @@ struct aircraft *interactiveReceiveData(struct modesMessage *mm) {
 
     a->seen = time(NULL);
     a->messages++;
-
+    a->rssi=mm->rssi;
     if (mm->msgtype == 0 || mm->msgtype == 4 || mm->msgtype == 20) {
         a->altitude = mm->altitude;
     } else if (mm->msgtype == 17) {
@@ -2002,7 +2004,7 @@ void interactiveShowData(void) {
 
     printf("\x1b[H\x1b[2J");    /* Clear the screen */
     printf(
-"Hex    Flight   Altitude  Speed   Lat       Lon       Track  Messages Seen %s\n"
+"Hex    Flight   Altitude  Speed   Lat       Lon       Track  Messages  RSSI  Seen %s\n"
 "--------------------------------------------------------------------------------\n",
         progress);
 
@@ -2015,10 +2017,10 @@ void interactiveShowData(void) {
             speed *= 1.852;
         }
 
-        printf("%-6s %-8s %-9d %-7d %-7.03f   %-7.03f   %-3d   %-9ld %d sec\n",
+        printf("%-6s %-8s %-9d %-7d %-7.03f   %-7.03f   %-3d   %-9ld  %-3.01f   %d sec\n",
             a->hexaddr, a->flight, altitude, speed,
             a->lat, a->lon, a->track, a->messages,
-            (int)(now - a->seen));
+            a->rssi,(int)(now - a->seen));
         a = a->next;
         count++;
     }
