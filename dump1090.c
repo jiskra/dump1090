@@ -411,10 +411,14 @@ int modesinitUHD(){
         // Set gain
         fprintf(stderr, "Setting RX Gain: %f dB...\n", (double)Modes.gain/10);
         if (uhd_usrp_set_rx_gain(Modes.usrp, (double)Modes.gain/10, signal_channel, "")) return 1;
+        if (Modes.enable_agc==1){
+        	if (uhd_usrp_set_rx_agc(Modes.usrp, 1, signal_channel)) return 1;
+        	fprintf(stderr,"Use the AGC mode.\n");}
 
         // See what gain actually is
         if (uhd_usrp_get_rx_gain(Modes.usrp, signal_channel, "", &gain_bk)) return 1;
         fprintf(stderr, "Actual RX Gain: %f...\n", gain_bk);
+        Modes.gain = (int) gain_bk;
 
         uhd_tune_request_t tune_request = {
                    .target_freq = (float)Modes.freq,
@@ -593,6 +597,8 @@ void *readThreadUHDSample(void *arg){
 	MODES_NOTUSED(arg);
 	size_t num_acc_samps = 0;
 	size_t num_rx_samps = 0;
+	size_t signal_channel = 0;
+	double gain_bk;
 	float *buff_start;
 	float *buff;
 	void **buffs_ptr;
@@ -627,6 +633,10 @@ void *readThreadUHDSample(void *arg){
 
 	  num_acc_samps += num_rx_samps;
 	  if ((2*num_acc_samps)>MODES_DATA_LEN) {
+		  // See what gain actually is
+		  if (uhd_usrp_get_rx_gain(Modes.usrp, signal_channel, "", &gain_bk)) return 1;
+		  Modes.gain = (int) gain_bk;
+		        //fprintf(stderr, "Actual RX Gain: %f...\n", gain_bk);
 		  pthread_mutex_lock(&Modes.data_mutex);
 		      /* Move the last part of the previous buffer, that was not processed,
 		       * on the start of the new buffer. */
@@ -1557,8 +1567,10 @@ void detectModeS(uint16_t *m, uint32_t mlen) {
          * of the high spikes level. We don't test bits too near to
          * the high levels as signals can be out of phase so part of the
          * energy can be in the near samples. */
-        high = (m[j]+m[j+2]+m[j+7]+m[j+9])/6;
-        amp = high+(m[j+1]+m[j+8])/6;
+        low = m[j+4];
+        high = (m[j]+m[j+2]+m[j+7]+m[j+9])/6; //the high value can not modified
+
+        amp = (m[j+1]+m[j+2]+m[j+3]+m[j+6]+m[j+7]+m[j+8])/2; //sub the noise floor
         if (m[j+4] >= high ||
             m[j+5] >= high)
         {
@@ -1670,7 +1682,7 @@ good_preamble:
             /* Decode the received message and update statistics */
             decodeModesMessage(&mm,msg);
             /*Calculate the RSSI of the pulse.*/
-            mm.rssi=20*log10f(amp)-Modes.gain/10-72;
+            mm.rssi=20*log10f(amp)-Modes.gain-72;
             /* Update statistics. */
             if (mm.crcok || use_correction) {
                 if (errors == 0) Modes.stat_demodulated++;
